@@ -6,6 +6,9 @@
   "main": "main.js",
   "private": true,
   "scripts": {
+    "build:css": "npx tailwindcss@3.4.16 -i input.css -o tailwind.css",
+    "prestart": "npm run build:css",
+    "premake": "npm run build:css",
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
@@ -32,6 +35,7 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron/fuses": "^1.8.0",
-    "electron": "40.6.0"
+    "electron": "40.6.0",
+    "tailwindcss": "^4.2.1"
   }
 }
