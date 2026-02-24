@@ -7,6 +7,8 @@ const tls = require('tls');
 const url = require('url');
 
 let pollTimer = null;
+let scanTimer = null;
+let sweepTimer = null;
 let sharedDir = null;
 let sendLog = null;
 
@@ -95,11 +97,13 @@ function writeServerChunk(id, buffer) {
     const conn = activeConnections.get(id);
     if (!conn || conn.isClosed) return;
 
+    const seq = conn.seqServerOut++;
+    const tmpPath = path.join(sharedDir, `res_${id}_${seq}.tmp`);
+    const chunkPath = path.join(sharedDir, `res_${id}_${seq}.dat`);
     try {
-        const chunkPath = path.join(sharedDir, `res_${id}_${conn.seqServerOut}.dat`);
-        fs.writeFileSync(chunkPath, buffer);
-        conn.seqServerOut++;
-    } catch (e) {
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, chunkPath);
+    } catch (err) {
         log('error', `Failed to write chunk for ${id}`);
         closeConnection(id, 'File write error');
     }
@@ -186,38 +190,80 @@ function handleNewRequest(id, reqData) {
     }
 }
 
+let isScanning = false;
 function scanForNewRequests() {
-    if (!sharedDir) return;
+    if (!sharedDir || isScanning) return;
+    isScanning = true;
 
-    let files;
-    try { files = fs.readdirSync(sharedDir); } catch (e) { return; }
+    fs.readdir(sharedDir, (err, files) => {
+        isScanning = false;
+        if (err || !files) return;
 
-    for (const f of files) {
-        if (!f.startsWith('req_') || !f.endsWith('.json')) continue;
-        if (f.includes('_end')) continue;
+        for (const f of files) {
+            if (!f.startsWith('req_') || !f.endsWith('.json')) continue;
+            if (f.includes('_end')) continue;
 
-        const id = f.replace(/^req_/, '').replace(/\.json$/, '');
-        if (activeConnections.has(id)) continue; // already processing
+            const id = f.replace(/^req_/, '').replace(/\.json$/, '');
+            if (activeConnections.has(id)) continue; // already processing
 
-        const reqPath = path.join(sharedDir, f);
-        let reqData;
-        try {
-            const raw = fs.readFileSync(reqPath, 'utf8');
-            reqData = JSON.parse(raw);
-        } catch (e) { continue; }
+            const reqPath = path.join(sharedDir, f);
 
-        log('info', `→ New connection ${id} (${reqData.url})`);
+            fs.readFile(reqPath, 'utf8', (err2, raw) => {
+                if (err2) return;
+                let reqData;
+                try { reqData = JSON.parse(raw); } catch (e) { return; }
 
-        // Remove init file
-        try { fs.unlinkSync(reqPath); } catch (_) { }
+                log('info', `→ New connection ${id} (${reqData.url})`);
 
-        handleNewRequest(id, reqData);
-    }
+                fs.unlink(reqPath, () => { });
+                handleNewRequest(id, reqData);
+            });
+        }
+    });
 }
 
 function poll() {
-    scanForNewRequests();
     processIncomingChunks();
+}
+
+let isSweeping = false;
+const seenOrphans = new Map();
+
+function sweepGarbage() {
+    if (!sharedDir || isSweeping) return;
+    isSweeping = true;
+    fs.readdir(sharedDir, (err, files) => {
+        if (err || !files) { isSweeping = false; return; }
+
+        const currentFiles = new Set(files);
+        const now = Date.now();
+
+        for (const f of files) {
+            const match = f.match(/^(?:req|res|ack)_([a-f0-9]+)/);
+            if (!match) continue;
+            const id = match[1];
+
+            if (activeConnections.has(id)) {
+                seenOrphans.delete(f);
+                continue;
+            }
+
+            if (!seenOrphans.has(f)) {
+                seenOrphans.set(f, now);
+            } else {
+                if (now - seenOrphans.get(f) > 15000) {
+                    fs.unlink(path.join(sharedDir, f), () => { });
+                    seenOrphans.delete(f);
+                }
+            }
+        }
+
+        for (const f of seenOrphans.keys()) {
+            if (!currentFiles.has(f)) seenOrphans.delete(f);
+        }
+
+        isSweeping = false;
+    });
 }
 
 module.exports = {
@@ -240,11 +286,16 @@ module.exports = {
             log('error', `Failed to cleanup folder: ${e.message}`);
         }
 
-        pollTimer = setInterval(poll, POLL_MS);
+        pollTimer = setInterval(poll, 10);
+        scanTimer = setInterval(scanForNewRequests, 200);
+        sweepTimer = setInterval(sweepGarbage, 5000);
         log('system', `Server Proxy started. Watching folder: ${sharedDir}`);
     },
     stop: async () => {
         clearInterval(pollTimer);
+        clearInterval(scanTimer);
+        clearInterval(sweepTimer);
+        seenOrphans.clear();
         for (const id of activeConnections.keys()) closeConnection(id);
         sharedDir = null;
     }

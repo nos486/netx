@@ -148,12 +148,16 @@ function appendLog(type, message, time = new Date().toLocaleTimeString()) {
   `;
 
     logContainer.appendChild(div);
-    logContainer.scrollTop = logContainer.scrollHeight;
 
     // Keep max 500 logs
     if (logContainer.children.length > 500) {
         logContainer.removeChild(logContainer.firstChild);
     }
+
+    // Always auto-scroll to latest log
+    requestAnimationFrame(() => {
+        logContainer.scrollTop = logContainer.scrollHeight + 100;
+    });
 }
 
 btnClear.addEventListener('click', () => {

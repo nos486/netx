@@ -11,6 +11,7 @@ let httpServer = null;
 let sharedDir = null;
 let sendLog = null;
 let pollTimer = null;
+let sweepTimer = null;
 
 const POLL_MS = 20;
 
@@ -60,11 +61,13 @@ function writeClientChunk(id, buffer) {
     const conn = activeConnections.get(id);
     if (!conn || conn.isClosed) return;
 
+    const seq = conn.seqClientOut++;
+    const tmpPath = path.join(sharedDir, `req_${id}_${seq}.tmp`);
+    const chunkPath = path.join(sharedDir, `req_${id}_${seq}.dat`);
     try {
-        const chunkPath = path.join(sharedDir, `req_${id}_${conn.seqClientOut}.dat`);
-        fs.writeFileSync(chunkPath, buffer);
-        conn.seqClientOut++;
-    } catch (e) {
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, chunkPath);
+    } catch (err) {
         log('error', `Failed to write client chunk for ${id}`);
         closeConnection(id, 'File write error');
     }
@@ -133,6 +136,46 @@ function processIncomingChunks() {
 
 function poll() {
     processIncomingChunks();
+}
+
+let isSweeping = false;
+const seenOrphans = new Map();
+
+function sweepGarbage() {
+    if (!sharedDir || isSweeping) return;
+    isSweeping = true;
+    fs.readdir(sharedDir, (err, files) => {
+        if (err || !files) { isSweeping = false; return; }
+
+        const currentFiles = new Set(files);
+        const now = Date.now();
+
+        for (const f of files) {
+            const match = f.match(/^(?:req|res|ack)_([a-f0-9]+)/);
+            if (!match) continue;
+            const id = match[1];
+
+            if (activeConnections.has(id)) {
+                seenOrphans.delete(f);
+                continue;
+            }
+
+            if (!seenOrphans.has(f)) {
+                seenOrphans.set(f, now);
+            } else {
+                if (now - seenOrphans.get(f) > 15000) {
+                    fs.unlink(path.join(sharedDir, f), () => { });
+                    seenOrphans.delete(f);
+                }
+            }
+        }
+
+        for (const f of seenOrphans.keys()) {
+            if (!currentFiles.has(f)) seenOrphans.delete(f);
+        }
+
+        isSweeping = false;
+    });
 }
 
 // ── Connection Init ───────────────────────────────────────────────────────────
@@ -373,7 +416,8 @@ module.exports = {
         httpServer = http.createServer((req, res) => proxyRequest(req, res, false));
         httpServer.on('connect', handleConnect);
 
-        pollTimer = setInterval(poll, POLL_MS); // Start scanning for chunk answers
+        pollTimer = setInterval(poll, 10);
+        sweepTimer = setInterval(sweepGarbage, 5000);
 
         return new Promise((resolve, reject) => {
             httpServer.listen(port, '127.0.0.1', () => {
@@ -385,6 +429,8 @@ module.exports = {
     },
     stop: async () => {
         clearInterval(pollTimer);
+        clearInterval(sweepTimer);
+        seenOrphans.clear();
         for (const id of activeConnections.keys()) closeConnection(id);
 
         if (httpServer) {
