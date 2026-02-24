@@ -85,6 +85,7 @@ btnToggle.addEventListener('click', async () => {
         // START
         btnToggle.disabled = true;
         btnToggle.innerText = 'Starting...';
+        logContainer.innerHTML = ''; // Auto-clear logs on start
 
         const result = await window.electronAPI.startProxy(config);
         if (result.success) {
@@ -95,10 +96,11 @@ btnToggle.addEventListener('click', async () => {
             statusText.innerText = 'Running';
             statusText.className = 'text-sm font-medium text-emerald-400';
 
-            // If client, swap to browser view
+            // If client, swap to browser view and auto-launch
             if (currentMode === 'client') {
                 viewLogs.classList.add('hidden');
                 viewBrowser.classList.remove('hidden');
+                btnLaunchChrome.click();
             }
         } else {
             appendLog('error', 'Failed to start: ' + result.error);

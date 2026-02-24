@@ -3,16 +3,20 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const net = require('net');
-const tls = require('tls');
-const crypto = require('crypto');
 const forge = require('node-forge');
+const crypto = require('crypto');
 const { app } = require('electron');
 
-let proxyServer = null;
+let httpServer = null;
 let sharedDir = null;
 let sendLog = null;
-const TIMEOUT_SEC = 60;
-const POLL_MS = 150;
+let pollTimer = null;
+
+const POLL_MS = 20;
+
+// Track active connections
+// id -> { res, clientSocket, isClosed, seqClientOut: 0, seqServerIn: 0 }
+const activeConnections = new Map();
 
 // CA Storage
 let caCertPem = null;
@@ -26,51 +30,167 @@ function makeId() {
     return crypto.randomBytes(6).toString('hex');
 }
 
-// ── Shared Folder Logic ───────────────────────────────────────────────────────
-function sendViaFiles(reqData) {
-    return new Promise((resolve, reject) => {
-        const id = makeId();
-        const reqPath = path.join(sharedDir, `req_${id}.json`);
-        const resPath = path.join(sharedDir, `res_${id}.json`);
+function closeConnection(id, errorStr = null) {
+    const conn = activeConnections.get(id);
+    if (!conn) return;
 
-        reqData.id = id;
+    conn.isClosed = true;
 
-        try { fs.writeFileSync(reqPath, JSON.stringify(reqData), 'utf8'); }
-        catch (e) { return reject(new Error(`Cannot write request: ${e.message}`)); }
+    // HTTP connection end
+    if (conn.res && !conn.res.headersSent) {
+        conn.res.writeHead(502);
+        conn.res.end(errorStr || 'Connection closed');
+    } else if (conn.res && !conn.res.writableEnded) {
+        conn.res.end();
+    }
 
-        const deadline = Date.now() + TIMEOUT_SEC * 1000;
-        const timer = setInterval(() => {
-            if (!fs.existsSync(resPath)) {
-                if (Date.now() > deadline) {
-                    clearInterval(timer);
-                    try { fs.unlinkSync(reqPath); } catch (_) { }
-                    reject(new Error('Timeout waiting for server'));
-                }
-                return;
+    // TCP/WebSocket connection end
+    if (conn.clientSocket && !conn.clientSocket.destroyed) {
+        conn.clientSocket.destroy();
+    }
+
+    try {
+        fs.writeFileSync(path.join(sharedDir, `req_${id}_end.json`), JSON.stringify({ error: errorStr, maxSeq: conn.seqClientOut }), 'utf8');
+    } catch (e) { }
+
+    activeConnections.delete(id);
+}
+
+function writeClientChunk(id, buffer) {
+    const conn = activeConnections.get(id);
+    if (!conn || conn.isClosed) return;
+
+    try {
+        const chunkPath = path.join(sharedDir, `req_${id}_${conn.seqClientOut}.dat`);
+        fs.writeFileSync(chunkPath, buffer);
+        conn.seqClientOut++;
+    } catch (e) {
+        log('error', `Failed to write client chunk for ${id}`);
+        closeConnection(id, 'File write error');
+    }
+}
+
+function processIncomingChunks() {
+    if (!sharedDir) return;
+
+    for (const [id, conn] of activeConnections.entries()) {
+        if (conn.isClosed) continue;
+
+        // Check for end signal from server
+        if (!conn.pendingEnd) {
+            const endPath = path.join(sharedDir, `res_${id}_end.json`);
+            if (fs.existsSync(endPath)) {
+                try {
+                    const data = JSON.parse(fs.readFileSync(endPath, 'utf8'));
+                    conn.pendingEnd = true;
+                    conn.endError = data.error;
+                    conn.endMaxSeq = data.maxSeq || 0;
+                    fs.unlinkSync(endPath);
+                } catch (_) { }
             }
-            clearInterval(timer);
-            let resData;
+        }
+
+        // Read all available contiguous chunks from server
+        while (true) {
+            const chunkPath = path.join(sharedDir, `res_${id}_${conn.seqServerIn}.dat`);
+            if (!fs.existsSync(chunkPath)) break;
+
             try {
-                const raw = fs.readFileSync(resPath, 'utf8');
-                resData = JSON.parse(raw);
+                const data = fs.readFileSync(chunkPath);
+
+                if (conn.clientSocket) {
+                    conn.clientSocket.write(data);
+                } else if (conn.res) {
+                    // For HTTP proxy responses, the very first server chunk is the header payload
+                    const strData = data.toString('utf8');
+                    if (!conn.headersSent && strData.startsWith('HEAD\n')) {
+                        const payloadStr = strData.substring(5);
+                        try {
+                            const { status, headers } = JSON.parse(payloadStr);
+                            conn.res.writeHead(status, headers || {});
+                            conn.headersSent = true;
+                        } catch (e) {
+                            log('error', `Failed to parse headers: ${e.message}`);
+                        }
+                    } else if (conn.headersSent && strData.startsWith('BODY\n')) {
+                        conn.res.write(data.subarray(5));
+                    }
+                }
+
+                fs.unlinkSync(chunkPath);
+                conn.seqServerIn++;
             } catch (e) {
-                return reject(new Error(`Bad response file: ${e.message}`));
+                // Ignore read errors, can be locked by writer
+                break;
             }
-            try { fs.unlinkSync(resPath); } catch (_) { }
-            resolve(resData);
-        }, POLL_MS);
-    });
+        }
+
+        if (conn.pendingEnd && conn.seqServerIn >= conn.endMaxSeq) {
+            closeConnection(id, conn.endError);
+        }
+    }
 }
 
-function collectBody(req) {
+function poll() {
+    processIncomingChunks();
+}
+
+// ── Connection Init ───────────────────────────────────────────────────────────
+async function openTunnel(reqData, res = null, clientSocket = null) {
+    const id = makeId();
+    const reqPath = path.join(sharedDir, `req_${id}.json`);
+    const ackPath = path.join(sharedDir, `ack_${id}.json`);
+
+    reqData.id = id;
+
+    // Track the new connection immediately
+    activeConnections.set(id, {
+        res,
+        clientSocket,
+        isClosed: false,
+        seqClientOut: 0,
+        seqServerIn: 0,
+        headersSent: false,
+        pendingEnd: false,
+        endError: null,
+        endMaxSeq: 0
+    });
+
+    try {
+        fs.writeFileSync(reqPath, JSON.stringify(reqData), 'utf8');
+        log('info', `Waiting for ACK on ${id} (${reqData.url})`);
+    } catch (e) {
+        closeConnection(id, `Cannot write Init file: ${e.message}`);
+        return null;
+    }
+
+    // Wait for the ACK
     return new Promise((resolve) => {
-        const chunks = [];
-        req.on('data', (c) => chunks.push(c));
-        req.on('end', () => resolve(Buffer.concat(chunks)));
-        req.on('error', () => resolve(Buffer.alloc(0)));
+        const timer = setInterval(() => {
+            if (!activeConnections.has(id) || activeConnections.get(id).isClosed) {
+                clearInterval(timer);
+                return resolve(null); // closed while waiting
+            }
+
+            if (fs.existsSync(ackPath)) {
+                clearInterval(timer);
+                try { fs.unlinkSync(ackPath); } catch (_) { }
+                resolve(id);
+            }
+        }, POLL_MS);
+
+        // 30s connection timeout
+        setTimeout(() => {
+            if (activeConnections.has(id) && !fs.existsSync(ackPath)) {
+                clearInterval(timer);
+                closeConnection(id, 'Tunnel connection timeout');
+                resolve(null);
+            }
+        }, 30000);
     });
 }
 
+// ── Shared Forge / Headers code ──────────────────────────────────────────────
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade', 'proxy-connection']);
 function filterHeaders(headers) {
     const out = {};
@@ -80,7 +200,6 @@ function filterHeaders(headers) {
     return out;
 }
 
-// ── Certificate Generation (node-forge) ───────────────────────────────────────
 function getOrGenerateCA() {
     const certsDir = path.join(app.getPath('userData'), 'certs');
     if (!fs.existsSync(certsDir)) fs.mkdirSync(certsDir, { recursive: true });
@@ -95,7 +214,7 @@ function getOrGenerateCA() {
         return;
     }
 
-    log('system', 'Generating new Root CA Certificate (this may take a moment)...');
+    log('system', 'Generating new Root CA Certificate...');
     const keys = forge.pki.rsa.generateKeyPair(2048);
     const cert = forge.pki.createCertificate();
     cert.publicKey = keys.publicKey;
@@ -119,7 +238,7 @@ function getOrGenerateCA() {
 
     fs.writeFileSync(certPath, caCertPem, 'utf8');
     fs.writeFileSync(keyPath, caPrivateKeyPem, 'utf8');
-    log('system', 'Generated and saved new Root CA Certificate.');
+    log('system', 'Generated new Root CA Certificate.');
 }
 
 const hostCertCache = {};
@@ -152,7 +271,7 @@ function generateHostCert(hostname) {
     return hostCertCache[hostname];
 }
 
-// ── HTTP Handlers ─────────────────────────────────────────────────────────────
+// ── Handlers ─────────────────────────────────────────────────────────────────
 async function proxyRequest(req, res, forceHttps = false) {
     let targetUrl = req.url;
     if (!targetUrl.startsWith('http')) {
@@ -160,55 +279,69 @@ async function proxyRequest(req, res, forceHttps = false) {
         targetUrl = protocol + req.headers.host + targetUrl;
     }
 
-    const method = req.method;
-    log('info', `→ ${method} ${targetUrl}`);
+    log('info', `→ ${req.method} ${targetUrl}`);
 
-    const bodyBuf = await collectBody(req);
     const reqData = {
-        method,
+        method: req.method,
         url: targetUrl,
-        headers: filterHeaders(req.headers),
-        body: bodyBuf.length > 0 ? bodyBuf.toString('base64') : null,
+        headers: filterHeaders(req.headers)
     };
 
-    let resData;
-    try {
-        resData = await sendViaFiles(reqData);
-    } catch (e) {
-        log('error', `Proxy error for ${targetUrl}: ${e.message}`);
-        if (!res.headersSent) {
-            res.writeHead(502);
-            res.end(`NetX Proxy Error: ${e.message}`);
-        }
-        return;
-    }
+    const id = await openTunnel(reqData, res, null);
+    if (!id) return; // connection failed or timed out
 
-    if (resData.error) log('warning', `Server error: ${resData.error}`);
-    else log('success', `← ${resData.status} ${targetUrl}`);
-
-    if (!res.headersSent) {
-        res.writeHead(resData.status || 200, filterHeaders(resData.headers || {}));
-        if (resData.body) res.end(Buffer.from(resData.body, 'base64'));
-        else res.end();
-    }
+    // Stream body up
+    req.on('data', (c) => writeClientChunk(id, c));
+    req.on('end', () => {
+        writeClientChunk(id, Buffer.from('EOF_REQ_BODY'));
+    });
+    req.on('error', () => closeConnection(id));
+    res.on('close', () => closeConnection(id)); // If browser drops while we are downloading
 }
 
-// ── HTTPS MITM CONNECT Handler ───────────────────────────────────────────────
-function handleConnect(req, clientSocket, head) {
+async function handleConnect(req, clientSocket, head) {
     const [hostname, port] = req.url.split(':');
 
-    // Acknowledge the CONNECT
+    // Is it a direct TCP WebSocket upgrade or true HTTP Connect?
+    // We will just do full TLS MITM for everything to read the target URL correctly.
     clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
 
-    // Generate fake cert for the requested host
     const { key, cert } = generateHostCert(hostname);
 
-    // Create an internal HTTPS server on-the-fly to handle the decrypted traffic
-    const mitmServer = https.createServer({ key, cert }, (mitmReq, mitmRes) => {
-        proxyRequest(mitmReq, mitmRes, true); // forceHttps = true
+    // We use a custom TLS server to decrypt the HTTPS traffic
+    const mitmServer = https.createServer({ key, cert });
+
+    mitmServer.on('request', (mitmReq, mitmRes) => {
+        proxyRequest(mitmReq, mitmRes, true);
     });
 
-    // We don't listen on a port; we just manually emit a connection event
+    // ── WebSocket Upgrade Support ──
+    mitmServer.on('upgrade', async (mitmReq, mitmSocket, mitmHead) => {
+        log('info', `→ WS Upgrade: ${mitmReq.url}`);
+
+        const reqData = {
+            method: 'TUNNEL', // We tell server to open a raw TCP or TLS tunnel
+            url: (parseInt(port, 10) === 443) ? `tls-tunnel://${hostname}:${port}` : `tunnel://${hostname}:${port}`
+        };
+
+        const id = await openTunnel(reqData, null, mitmSocket);
+        if (!id) return;
+
+        // The WebSocket handshake must be forwarded as the exact bytes
+        const reqLines = [`${mitmReq.method} ${mitmReq.url} HTTP/${mitmReq.httpVersion}`];
+        for (let i = 0; i < mitmReq.rawHeaders.length; i += 2) {
+            reqLines.push(`${mitmReq.rawHeaders[i]}: ${mitmReq.rawHeaders[i + 1]}`);
+        }
+        reqLines.push('\r\n');
+
+        writeClientChunk(id, Buffer.from(reqLines.join('\r\n')));
+        if (mitmHead && mitmHead.length > 0) writeClientChunk(id, mitmHead);
+
+        mitmSocket.on('data', (buf) => writeClientChunk(id, buf));
+        mitmSocket.on('end', () => closeConnection(id));
+        mitmSocket.on('error', () => closeConnection(id));
+    });
+
     mitmServer.emit('connection', clientSocket);
 }
 
@@ -221,23 +354,42 @@ module.exports = {
 
         if (!sharedDir || !fs.existsSync(sharedDir)) throw new Error('Invalid shared folder path.');
 
+        // Clean up any zombie files from previous crashes
+        try {
+            const files = fs.readdirSync(sharedDir);
+            let deleted = 0;
+            for (const f of files) {
+                if (f.startsWith('req_') || f.startsWith('res_') || f.startsWith('ack_')) {
+                    try { fs.unlinkSync(path.join(sharedDir, f)); deleted++; } catch (_) { }
+                }
+            }
+            if (deleted > 0) log('system', `Cleaned up ${deleted} zombie files on startup.`);
+        } catch (e) {
+            log('error', `Failed to cleanup folder: ${e.message}`);
+        }
+
         getOrGenerateCA();
 
-        httpServer = http.createServer((req, res) => proxyRequest(req, res, false)); // Changed from proxyServer
-        httpServer.on('connect', handleConnect); // Changed from proxyServer
+        httpServer = http.createServer((req, res) => proxyRequest(req, res, false));
+        httpServer.on('connect', handleConnect);
+
+        pollTimer = setInterval(poll, POLL_MS); // Start scanning for chunk answers
 
         return new Promise((resolve, reject) => {
-            httpServer.listen(port, '127.0.0.1', () => { // Changed from proxyServer
+            httpServer.listen(port, '127.0.0.1', () => {
                 log('system', `Client Proxy started on 127.0.0.1:${port}`);
                 resolve();
             });
-            httpServer.on('error', (e) => reject(e)); // Changed from proxyServer
+            httpServer.on('error', (e) => reject(e));
         });
     },
     stop: async () => {
-        if (httpServer) { // Changed from proxyServer
-            httpServer.close(); // Changed from proxyServer
-            httpServer = null; // Changed from proxyServer
+        clearInterval(pollTimer);
+        for (const id of activeConnections.keys()) closeConnection(id);
+
+        if (httpServer) {
+            httpServer.close();
+            httpServer = null;
         }
     }
 };
