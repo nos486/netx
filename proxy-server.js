@@ -23,6 +23,7 @@ function log(type, msg) {
 }
 
 function closeConnection(id, errorStr = null) {
+    flushServerBuffer(id);
     const conn = activeConnections.get(id);
     if (!conn) return;
 
@@ -93,9 +94,13 @@ function processIncomingChunks() {
     }
 }
 
-function writeServerChunk(id, buffer) {
+function flushServerBuffer(id) {
     const conn = activeConnections.get(id);
-    if (!conn || conn.isClosed) return;
+    if (!conn || conn.isClosed || conn.outBuffer.length === 0) return;
+
+    const buffer = Buffer.concat(conn.outBuffer);
+    conn.outBuffer = [];
+    conn.outBufferLen = 0;
 
     const seq = conn.seqServerOut++;
     const tmpPath = path.join(sharedDir, `res_${id}_${seq}.tmp`);
@@ -109,6 +114,22 @@ function writeServerChunk(id, buffer) {
     }
 }
 
+function writeServerChunk(id, buffer, isolate = false) {
+    const conn = activeConnections.get(id);
+    if (!conn || conn.isClosed) return;
+
+    if (isolate) {
+        flushServerBuffer(id);
+        conn.outBuffer.push(buffer);
+        conn.outBufferLen += buffer.length;
+        flushServerBuffer(id);
+    } else {
+        conn.outBuffer.push(buffer);
+        conn.outBufferLen += buffer.length;
+        if (conn.outBufferLen >= 128 * 1024) flushServerBuffer(id);
+    }
+}
+
 function handleNewRequest(id, reqData) {
     activeConnections.set(id, {
         socket: null,
@@ -118,7 +139,9 @@ function handleNewRequest(id, reqData) {
         seqServerOut: 0,
         pendingEnd: false,
         endError: null,
-        endMaxSeq: 0
+        endMaxSeq: 0,
+        outBuffer: [],
+        outBufferLen: 0
     });
 
     const conn = activeConnections.get(id);
@@ -177,9 +200,9 @@ function handleNewRequest(id, reqData) {
                 status: res.statusCode,
                 headers: res.headers
             }));
-            writeServerChunk(id, Buffer.concat([Buffer.from('HEAD\n'), headerPayload]));
+            writeServerChunk(id, Buffer.concat([Buffer.from('HEAD\n'), headerPayload]), true);
 
-            res.on('data', (buf) => writeServerChunk(id, Buffer.concat([Buffer.from('BODY\n'), buf])));
+            res.on('data', (buf) => writeServerChunk(id, buf));
             res.on('end', () => closeConnection(id));
         });
 
@@ -223,6 +246,11 @@ function scanForNewRequests() {
 }
 
 function poll() {
+    for (const [id, conn] of activeConnections.entries()) {
+        if (!conn.isClosed && conn.outBuffer.length > 0) {
+            flushServerBuffer(id);
+        }
+    }
     processIncomingChunks();
 }
 

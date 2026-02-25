@@ -32,6 +32,7 @@ function makeId() {
 }
 
 function closeConnection(id, errorStr = null) {
+    flushClientBuffer(id);
     const conn = activeConnections.get(id);
     if (!conn) return;
 
@@ -57,9 +58,13 @@ function closeConnection(id, errorStr = null) {
     activeConnections.delete(id);
 }
 
-function writeClientChunk(id, buffer) {
+function flushClientBuffer(id) {
     const conn = activeConnections.get(id);
-    if (!conn || conn.isClosed) return;
+    if (!conn || conn.isClosed || conn.outBuffer.length === 0) return;
+
+    const buffer = Buffer.concat(conn.outBuffer);
+    conn.outBuffer = [];
+    conn.outBufferLen = 0;
 
     const seq = conn.seqClientOut++;
     const tmpPath = path.join(sharedDir, `req_${id}_${seq}.tmp`);
@@ -70,6 +75,22 @@ function writeClientChunk(id, buffer) {
     } catch (err) {
         log('error', `Failed to write client chunk for ${id}`);
         closeConnection(id, 'File write error');
+    }
+}
+
+function writeClientChunk(id, buffer, isolate = false) {
+    const conn = activeConnections.get(id);
+    if (!conn || conn.isClosed) return;
+
+    if (isolate) {
+        flushClientBuffer(id);
+        conn.outBuffer.push(buffer);
+        conn.outBufferLen += buffer.length;
+        flushClientBuffer(id);
+    } else {
+        conn.outBuffer.push(buffer);
+        conn.outBufferLen += buffer.length;
+        if (conn.outBufferLen >= 128 * 1024) flushClientBuffer(id);
     }
 }
 
@@ -115,8 +136,8 @@ function processIncomingChunks() {
                         } catch (e) {
                             log('error', `Failed to parse headers: ${e.message}`);
                         }
-                    } else if (conn.headersSent && strData.startsWith('BODY\n')) {
-                        conn.res.write(data.subarray(5));
+                    } else if (conn.headersSent) {
+                        conn.res.write(data);
                     }
                 }
 
@@ -135,6 +156,11 @@ function processIncomingChunks() {
 }
 
 function poll() {
+    for (const [id, conn] of activeConnections.entries()) {
+        if (!conn.isClosed && conn.outBuffer.length > 0) {
+            flushClientBuffer(id);
+        }
+    }
     processIncomingChunks();
 }
 
@@ -196,7 +222,9 @@ async function openTunnel(reqData, res = null, clientSocket = null) {
         headersSent: false,
         pendingEnd: false,
         endError: null,
-        endMaxSeq: 0
+        endMaxSeq: 0,
+        outBuffer: [],
+        outBufferLen: 0
     });
 
     try {
@@ -336,7 +364,7 @@ async function proxyRequest(req, res, forceHttps = false) {
     // Stream body up
     req.on('data', (c) => writeClientChunk(id, c));
     req.on('end', () => {
-        writeClientChunk(id, Buffer.from('EOF_REQ_BODY'));
+        writeClientChunk(id, Buffer.from('EOF_REQ_BODY'), true);
     });
     req.on('error', () => closeConnection(id));
     res.on('close', () => closeConnection(id)); // If browser drops while we are downloading
