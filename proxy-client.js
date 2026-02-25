@@ -507,6 +507,11 @@ async function handleConnect(req, clientSocket, head) {
         mitmSocket.on('error', () => closeConnection(id));
     });
 
+    // Catch early drops before the secure TLS connection establishes
+    clientSocket.on('error', (err) => {
+        log('warning', `MITM pre-TLS socket closed: ${err.message}`);
+    });
+
     mitmServer.emit('connection', clientSocket);
 }
 
