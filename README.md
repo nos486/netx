@@ -1,87 +1,89 @@
-# NetX
+# NetX: The Air-Gapped Network Bridge
 
-A beautiful, single-file desktop application that shares internet access between two machines using only a **shared folder** (network drive, USB sync, Syncthing, etc.).
+**GitHub Description:** An Electron-based desktop application that tunnels HTTP, HTTPS, WebSockets, and SOCKS5 proxy traffic between air-gapped computers using only a shared file system (USB drive, network share, or Syncthing).
 
-No complex networking setup. The built-in **Portable Browser** handles HTTP and HTTPS traffic seamlessly right out of the box, with full support for video streaming and real-time WebSockets.
+NetX is a powerful, single-file desktop application designed to share internet access between two machines using nothing but a **shared folder** (like a network drive, USB drive, or Syncthing). It bridges the gap between offline and online environments without requiring administrative privileges, complex networking setups, or root certificate installations.
 
-## Features
-- **One unified App**: Toggle between Server and Client modes instantly.
-- **Bidirectional Streaming Protocol**: The revolutionary new engine chunks all network requests into tiny `.dat` files, enabling infinite video streaming and real-time two-way WebSocket connections over any filesystem. 
-- **Launch Real Browser**: The Offline Client automatically launches an isolated **Google Chrome** instance. No need to install dangerous Root CAs into your operating system, and no need to configure your system-wide proxy settings.
-- **Full HTTPS Support**: Built-in TLS MITM proxy perfectly inspects, tunnels, and encrypts HTTPS.
-- **Cross-Platform**: Runs on Windows, macOS, and Linux.
-- **Auto-Cleanup & Logging**: The Server and Client automatically purge zombie `.dat` and `.json` files when starting, and clear the UI logs to keep your session pristine.
+## 🚀 Key Features
 
----
+- **Bidirectional Streaming Protocol**: The core engine chunks all network requests into `.dat` files, enabling infinite video streaming and real-time bidirectional WebSocket connections over standard file system I/O.
+- **Dual-Engine Architecture**: 
+  - **Performance Mode (V1)**: Pure speed for lightning-fast web browsing and file transfers over slow USB drives.
+  - **Compatibility Mode (V2)**: Bidirectional chunked streaming that fully supports WebSockets, Video Streaming, and complex enterprise apps like VMware Horizon.
+- **Server-to-Client Config Sync**: The Server dynamically exports its performance tuning parameters (Poll Intervals, Max Chunk Sizes) directly into the shared folder, allowing the Client to automatically configure its engine without mismatched settings.
+- **Double-Hop SOCKS5 Tunneling**: Turn your Client machine into a local SOCKS5 proxy (e.g., `127.0.0.1:1080`). Route third-party applications like Telegram, Firefox, or Tor through the offline network gap and seamlessly out to the Internet.
+- **Automated Browser Sandboxing**: The Client proxy automatically spawns an isolated, temporary Google Chrome instance. No need to modify system-wide proxy settings or install dangerous Root CAs into your operating system.
+- **Robust Outbound Proxy Support**: The Server can route its outbound destination traffic through external SOCKS5 brokers (like Corporate Proxies or Tor) for ultimate privacy.
 
-## How It Works
+## 🏗️ How It Works Architecture
 
-```
-Machine A (internet)          Shared Folder          Machine B (no internet)
+```text
+Machine A (Internet)           Shared Folder           Machine B (Air-Gapped)
 ┌──────────────────┐         ┌────────────┐         ┌────────────────────────┐
 │  NetX Desktop    │◄────────│req_1.json  │◄────────│   NetX Desktop         │
 │  [Server Mode]   │────────►│ack_1.json  │────────►│   [Client Mode]        │
 │                  │         │            │         │                        │
-│   (TLS Tunnel)   │◄────────│req_1_0.dat │◄────────│   (wss:// Upgrade)     │
+│   (TLS Tunnel)   │◄────────│req_1_0.dat │◄────────│   (wss:// / Socks5)    │
 │                  │────────►│res_1_0.dat │────────►│                        │
 └──────────────────┘         └────────────┘         └──────────▲─────────────┘
                                                                │  (Proxy :8080)
                                                     ┌──────────┴─────────────┐
-                                                    │ Real Google Chrome     │
+                                                    │ Isolated Google Chrome │
                                                     └────────────────────────┘
 ```
-The **Client** stands up a local HTTP/HTTPS proxy. It connects to the web browser and converts TCP socket streams into sequential `.dat` chunks written to a shared folder. The **Server** reads them, streams the data to the real internet, and streams the incoming results back into `.dat` chunks. 
 
-When you start the offline machine's proxy, NetX seamlessly spawns an isolated Chrome window configured to use this proxy and trust the local HTTPS certificates.
+The **Client** stands up a local HTTP/HTTPS/SOCKS5 proxy. It intercepts network traffic natively and converts TCP/TLS socket streams into sequentially buffered `.dat` chunks written to a shared folder. The **Server** consumes these files, streams the decrypted data directly to the internet, and writes the incoming responses back as `.dat` chunks for the Client to reconstruct.
 
----
+## 📥 Installation & Deployment
 
-## Installation 
-
-### Option 1 (Compile from Source)
-Make sure NodeJS is installed.
+### Compile from Source
+Ensure Node.js is installed on your system.
 ```bash
 git clone https://github.com/nos486/netx.git
 cd netx
 npm install
-npm start         # Run app locally
+npm start         # Launch the app locally
 ```
 
-### Option 2 (Build Executables)
-NetX uses Electron Forge to compile standalone apps for any operating system.
+### Build Executables (Electron Forge)
+NetX uses Electron Forge to compile standalone applications for Windows, macOS, and Linux.
 
-**Mac / Linux / Windows**
-Simply run the package command from the OS you want to target:
-```bash
-npm run package -- --platform=win32 --arch=x64
-```
-The compiled Application (e.g., `<app>.dmg`, `<app>.exe`, `<app>.zip`, `<app>.deb`) will be generated inside the `/out/` folder. Copy that file onto a USB and put it on your offline machine.
+1. Install dependencies (`npm install`).
+2. Run the packaging command for your target operating system:
+   ```bash
+   # Build for Windows (Must be run on a Windows machine)
+   npm run package -- --platform=win32 --arch=x64
 
-*Note: You must run `package` on a Windows machine to build the `.exe`, and on a Mac to build the macOS releases.*
+   # Build for macOS (Must be run on a Mac)
+   npm run package -- --platform=darwin --arch=x64
 
----
+   # Build for Linux
+   npm run package -- --platform=linux --arch=x64
+   ```
+3. Copy the compiled executable from the `/out/` directory onto a USB drive and transport it to your air-gapped machine.
 
-## Usage Guide
+## 📖 Usage Guide
 
 ### 1. Set up a Shared Folder
-Both machines must be able to read/write to the same folder rapidly. Options:
-- **Syncthing** (highly recommended for near-instant low latency WebSockets and Video Streaming)
-- **Windows network share / SMB**
-- **USB drive** mounted on both machines.
+Both machines must have read/write access to the exact same directory. Recommended setups:
+- **Syncthing**: Highly recommended. Provides near-instant, low-latency synchronization for WebSockets and Video Streaming.
+- **Windows Network Share / SMB / Samba**
+- **USB Drive / External Hard Drive**
 
-### 2. Start the Server (The machine with Internet)
-1. Open NetX.
-2. Click **Server (Internet)** mode.
-3. Click **Browse** and select your shared folder.
-4. Click **Start Proxy**.
-   *(It will display a live log of connections being established and will automatically sweep dead files)*
+### 2. Configure the Server (Internet-Connected Machine)
+1. Open the NetX Desktop Application.
+2. Select **Server (Internet)** mode.
+3. Choose your preferred **Routing Engine**:
+   - V1 (Fastest, Web Browsing)
+   - V2 (Streaming, WebSockets)
+4. Select the shared folder.
+5. Click **Start Proxy**. *The Server will generate a `netx_config.json` file in the folder to synchronize the Client automatically.*
 
-### 3. Start the Client (The Offline machine)
-1. Open NetX.
-2. Click **Client (Offline)** mode.
+### 3. Configure the Client (Air-Gapped Machine)
+1. Open the NetX Desktop Application.
+2. Select **Client (Offline)** mode.
 3. Select the **SAME** shared folder.
-4. Click **Start Proxy**.
+4. Customize your Local Ports (Optional) if you wish to run a raw local SOCKS5 proxy for third-party apps.
+5. Click **Start Proxy**.
 
-**That's it!** A Google Chrome browser will automatically launch. 
-
-Type any URL (like `https://youtube.com` or `wss://echo.websocket.org`) into the address bar and hit Enter. The page will load perfectly with no blocking certificate warnings!
+**That's it!** NetX will automatically launch an isolated Google Chrome browser. Type any URL (like `https://youtube.com` or `wss://echo.websocket.org`) into the address bar. The page will load perfectly with all traffic seamlessly bridged across your offline file system.
