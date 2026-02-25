@@ -89,7 +89,7 @@ ipcMain.handle('netx:launchBrowser', async (event, port) => {
                 `--proxy-server=http=127.0.0.1:${port};https=127.0.0.1:${port}`,
                 '--ignore-certificate-errors',
                 `--user-data-dir=${profilePath}`,
-                '--no-first-run'
+                '--restore-last-session'
             ]
         });
         return { success: true };

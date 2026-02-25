@@ -400,7 +400,10 @@ async function handleConnect(req, clientSocket, head) {
 
         // The WebSocket handshake must be forwarded as exact bytes, but we must
         // translate the URL back to a relative path and ensure Origin/Host match
-        const reqLines = [`${mitmReq.method} ${mitmReq.url} HTTP/${mitmReq.httpVersion}`];
+        const parsedUrl = url.parse(mitmReq.url);
+        const relativePath = parsedUrl.path || '/';
+
+        const reqLines = [`${mitmReq.method} ${relativePath} HTTP/${mitmReq.httpVersion}`];
         for (let i = 0; i < mitmReq.rawHeaders.length; i += 2) {
             let key = mitmReq.rawHeaders[i];
             let val = mitmReq.rawHeaders[i + 1];
