@@ -11,6 +11,7 @@ const inputSocks = document.getElementById('input-socks');
 const selectProtocol = document.getElementById('select-protocol');
 const inputPoll = document.getElementById('input-poll');
 const inputChunk = document.getElementById('input-chunk');
+const inputClientSocks = document.getElementById('input-client-socks');
 
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
@@ -59,6 +60,7 @@ const savedSocks = localStorage.getItem('netx-socks') || '';
 const savedProtocol = localStorage.getItem('netx-protocol') || 'v2';
 const savedPoll = localStorage.getItem('netx-poll') || '150';
 const savedChunk = localStorage.getItem('netx-chunk') || '512';
+const savedClientSocks = localStorage.getItem('netx-client-socks') || '';
 
 inputFolder.value = savedFolder;
 inputPort.value = savedPort;
@@ -66,6 +68,7 @@ inputSocks.value = savedSocks;
 selectProtocol.value = savedProtocol;
 inputPoll.value = savedPoll;
 inputChunk.value = savedChunk;
+inputClientSocks.value = savedClientSocks;
 if (savedFolder) btnToggle.disabled = false;
 
 setMode(savedMode);
@@ -89,6 +92,7 @@ inputSocks.addEventListener('change', () => localStorage.setItem('netx-socks', i
 selectProtocol.addEventListener('change', () => localStorage.setItem('netx-protocol', selectProtocol.value));
 inputPoll.addEventListener('change', () => localStorage.setItem('netx-poll', inputPoll.value));
 inputChunk.addEventListener('change', () => localStorage.setItem('netx-chunk', inputChunk.value));
+inputClientSocks.addEventListener('change', () => localStorage.setItem('netx-client-socks', inputClientSocks.value));
 
 // Start / Stop
 btnToggle.addEventListener('click', async () => {
@@ -98,7 +102,10 @@ btnToggle.addEventListener('click', async () => {
         port: parseInt(inputPort.value, 10) || 8080,
     };
 
-    if (currentMode === 'server') {
+    if (currentMode === 'client') {
+        const csPort = parseInt(inputClientSocks.value, 10);
+        if (!isNaN(csPort) && csPort > 0) config.clientSocksPort = csPort;
+    } else if (currentMode === 'server') {
         config.socks = inputSocks.value.trim();
         config.protocol = selectProtocol.value;
         config.pollMs = parseInt(inputPoll.value, 10) || 150;

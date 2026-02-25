@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 
 let httpServer = null;
+let socksServer = null;
 let sharedDir = null;
 let sendLog = null;
 let pollTimer = null;
@@ -515,6 +516,57 @@ async function handleConnect(req, clientSocket, head) {
     mitmServer.emit('connection', clientSocket);
 }
 
+// ── Shared SOCKS5 Handler ──────────────────────────────────────────────
+function handleSocksConnection(socket) {
+    socket.once('data', (data) => {
+        if (data[0] !== 0x05) return socket.destroy();
+
+        socket.write(Buffer.from([0x05, 0x00])); // NO AUTH
+
+        socket.once('data', async (head) => {
+            if (head[0] !== 0x05 || head[1] !== 0x01) return socket.destroy(); // Only CONNECT supported
+
+            let host = '';
+            let port = 0;
+            let offset = 4;
+
+            const atype = head[3];
+            if (atype === 0x01) { // IPv4
+                host = `${head[4]}.${head[5]}.${head[6]}.${head[7]}`;
+                offset += 4;
+            } else if (atype === 0x03) { // Domain
+                const len = head[offset];
+                offset++;
+                host = head.slice(offset, offset + len).toString('utf8');
+                offset += len;
+            } else {
+                return socket.destroy();
+            }
+
+            port = head.readUInt16BE(offset);
+
+            log('info', `→ SOCKS5 Tunnel: ${host}:${port}`);
+
+            // Pre-emptively send Success so the application starts streaming into us
+            socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+
+            const reqData = {
+                method: 'TUNNEL',
+                url: `tunnel://${host}:${port}`,
+            };
+
+            const id = await openTunnel(reqData, null, socket);
+            if (!id) return;
+
+            socket.on('data', (buf) => writeClientChunk(id, buf));
+            socket.on('end', () => closeConnection(id));
+            socket.on('error', () => closeConnection(id));
+        });
+    });
+
+    socket.on('error', (err) => log('warning', `Local SOCKS5 Socket Error: ${err.message}`));
+}
+
 // ── Exports ──────────────────────────────────────────────────────────────────
 module.exports = {
     start: async (config, logCb) => {
@@ -562,13 +614,27 @@ module.exports = {
         pollTimer = setInterval(poll, Math.max(10, pollMs));
         sweepTimer = setInterval(sweepGarbage, 5000);
 
-        return new Promise((resolve, reject) => {
+        const promises = [];
+        promises.push(new Promise((resolve, reject) => {
             httpServer.listen(port, '127.0.0.1', () => {
-                log('system', `Client Proxy started on 127.0.0.1:${port}`);
+                log('system', `Client HTTP Proxy started on 127.0.0.1:${port}`);
                 resolve();
             });
             httpServer.on('error', (e) => reject(e));
-        });
+        }));
+
+        if (config.clientSocksPort) {
+            socksServer = net.createServer(handleSocksConnection);
+            promises.push(new Promise((resolve, reject) => {
+                socksServer.listen(config.clientSocksPort, '127.0.0.1', () => {
+                    log('system', `Client SOCKS5 Proxy started on 127.0.0.1:${config.clientSocksPort}`);
+                    resolve();
+                });
+                socksServer.on('error', (e) => reject(e));
+            }));
+        }
+
+        return Promise.all(promises);
     },
     stop: async () => {
         clearInterval(pollTimer);
@@ -580,5 +646,12 @@ module.exports = {
             httpServer.close();
             httpServer = null;
         }
+
+        if (socksServer) {
+            socksServer.close();
+            socksServer = null;
+        }
+
+        sharedDir = null;
     }
 };

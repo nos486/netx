@@ -83,12 +83,23 @@
         </div>
 
         <!-- Client Only Settings -->
-        <div id="client-settings" class="col-span-1 md:col-span-2 hidden">
-          <div class="space-y-2">
-            <label class="block text-sm font-medium text-slate-400">Local Proxy Port</label>
-            <input type="number" id="input-port" value="8080"
-              class="w-48 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500">
-            <p class="text-xs text-slate-500 mt-1">Leave as 8080. When started, a built-in browser will appear.</p>
+        <div id="client-settings" class="col-span-1 md:col-span-2 hidden space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="block text-sm font-medium text-slate-400">Local HTTP Proxy Port</label>
+              <input type="number" id="input-port" value="8080"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500">
+              <p class="text-xs text-slate-500 mt-1">Leave as 8080. A built-in browser will inject this automatically.
+              </p>
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-sm font-medium text-slate-400">Local SOCKS5 Port (Optional)</label>
+              <input type="number" id="input-client-socks" placeholder="1080"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500">
+              <p class="text-xs text-slate-500 mt-1">Set to 1080 to route external apps (e.g. Telegram) offline via
+                SOCKS5.</p>
+            </div>
           </div>
         </div>
 
