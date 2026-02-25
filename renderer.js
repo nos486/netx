@@ -9,6 +9,8 @@ const btnBrowse = document.getElementById('btn-browse');
 const inputPort = document.getElementById('input-port');
 const inputSocks = document.getElementById('input-socks');
 const selectProtocol = document.getElementById('select-protocol');
+const inputPoll = document.getElementById('input-poll');
+const inputChunk = document.getElementById('input-chunk');
 
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
@@ -55,11 +57,15 @@ const savedFolder = localStorage.getItem('netx-folder') || '';
 const savedPort = localStorage.getItem('netx-port') || '8080';
 const savedSocks = localStorage.getItem('netx-socks') || '';
 const savedProtocol = localStorage.getItem('netx-protocol') || 'v2';
+const savedPoll = localStorage.getItem('netx-poll') || '150';
+const savedChunk = localStorage.getItem('netx-chunk') || '512';
 
 inputFolder.value = savedFolder;
 inputPort.value = savedPort;
 inputSocks.value = savedSocks;
 selectProtocol.value = savedProtocol;
+inputPoll.value = savedPoll;
+inputChunk.value = savedChunk;
 if (savedFolder) btnToggle.disabled = false;
 
 setMode(savedMode);
@@ -81,6 +87,8 @@ btnBrowse.addEventListener('click', async () => {
 inputPort.addEventListener('change', () => localStorage.setItem('netx-port', inputPort.value));
 inputSocks.addEventListener('change', () => localStorage.setItem('netx-socks', inputSocks.value));
 selectProtocol.addEventListener('change', () => localStorage.setItem('netx-protocol', selectProtocol.value));
+inputPoll.addEventListener('change', () => localStorage.setItem('netx-poll', inputPoll.value));
+inputChunk.addEventListener('change', () => localStorage.setItem('netx-chunk', inputChunk.value));
 
 // Start / Stop
 btnToggle.addEventListener('click', async () => {
@@ -88,9 +96,14 @@ btnToggle.addEventListener('click', async () => {
         mode: currentMode,
         folder: inputFolder.value,
         port: parseInt(inputPort.value, 10) || 8080,
-        socks: inputSocks.value.trim(),
-        protocol: selectProtocol.value
     };
+
+    if (currentMode === 'server') {
+        config.socks = inputSocks.value.trim();
+        config.protocol = selectProtocol.value;
+        config.pollMs = parseInt(inputPoll.value, 10) || 150;
+        config.maxChunkBytes = (parseInt(inputChunk.value, 10) || 512) * 1024;
+    }
 
     if (!isRunning) {
         // START

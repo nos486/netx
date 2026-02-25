@@ -13,9 +13,10 @@ let sendLog = null;
 let pollTimer = null;
 let sweepTimer = null;
 let activeProtocol = 'v2';
+let maxChunkBytes = 512 * 1024;
+let pollMs = 150;
 
 const TIMEOUT_SEC = 60;
-const POLL_MS = 150;
 
 // Track active connections
 // id -> { res, clientSocket, isClosed, seqClientOut: 0, seqServerIn: 0 }
@@ -92,7 +93,7 @@ function writeClientChunk(id, buffer, isolate = false) {
     } else {
         conn.outBuffer.push(buffer);
         conn.outBufferLen += buffer.length;
-        if (conn.outBufferLen >= 512 * 1024) flushClientBuffer(id);
+        if (conn.outBufferLen >= maxChunkBytes) flushClientBuffer(id);
     }
 }
 
@@ -250,7 +251,7 @@ async function openTunnel(reqData, res = null, clientSocket = null) {
                 try { fs.unlinkSync(ackPath); } catch (_) { }
                 resolve(id);
             }
-        }, POLL_MS);
+        }, Math.max(10, pollMs));
 
         // 30s connection timeout
         setTimeout(() => {
@@ -295,7 +296,7 @@ function sendViaFiles(reqData) {
             }
             try { fs.unlinkSync(resPath); } catch (_) { }
             resolve(resData);
-        }, POLL_MS);
+        }, pollMs);
     });
 }
 
@@ -514,10 +515,25 @@ module.exports = {
     start: async (config, logCb) => {
         sendLog = logCb;
         sharedDir = config.folder;
-        activeProtocol = config.protocol || 'v2';
         const port = config.port || 8080;
 
         if (!sharedDir || !fs.existsSync(sharedDir)) throw new Error('Invalid shared folder path.');
+
+        // Verify Server Configuration File
+        const configPath = path.join(sharedDir, 'netx_config.json');
+        if (!fs.existsSync(configPath)) {
+            throw new Error('Server configuration flag missing. You must start the NetX Server first.');
+        }
+
+        try {
+            const serverConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            activeProtocol = serverConfig.protocol || 'v2';
+            pollMs = serverConfig.pollMs || 150;
+            maxChunkBytes = serverConfig.maxChunkBytes || (512 * 1024);
+            log('system', `Synchronized with Server (Protocol: ${activeProtocol}, Chunk Limit: ${maxChunkBytes / 1024}KB, Poll: ${pollMs}ms)`);
+        } catch (e) {
+            throw new Error('Failed to parse active server config. Try restarting the NetX Server.');
+        }
 
         // Clean up any zombie files from previous crashes
         try {
@@ -538,7 +554,7 @@ module.exports = {
         httpServer = http.createServer((req, res) => proxyRequest(req, res, false));
         httpServer.on('connect', handleConnect);
 
-        pollTimer = setInterval(poll, 10);
+        pollTimer = setInterval(poll, Math.max(10, pollMs));
         sweepTimer = setInterval(sweepGarbage, 5000);
 
         return new Promise((resolve, reject) => {

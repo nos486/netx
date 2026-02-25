@@ -13,6 +13,7 @@ let pollTimer = null;
 let scanTimer = null;
 let sweepTimer = null;
 let activeProtocol = 'v2';
+let maxChunkBytes = 512 * 1024;
 const inProgress = new Set();
 
 let sharedDir = null;
@@ -133,7 +134,7 @@ function writeServerChunk(id, buffer, isolate = false) {
     } else {
         conn.outBuffer.push(buffer);
         conn.outBufferLen += buffer.length;
-        if (conn.outBufferLen >= 512 * 1024) flushServerBuffer(id);
+        if (conn.outBufferLen >= maxChunkBytes) flushServerBuffer(id);
     }
 }
 
@@ -444,6 +445,9 @@ module.exports = {
         sharedDir = config.folder;
         socksProxyUrl = config.socks || null;
         activeProtocol = config.protocol || 'v2';
+        maxChunkBytes = config.maxChunkBytes || (512 * 1024);
+        const pollMs = config.pollMs || 150;
+
         if (!sharedDir || !fs.existsSync(sharedDir)) throw new Error('Invalid shared folder path.');
 
         // Clean up any zombie files from previous crashes
@@ -460,18 +464,28 @@ module.exports = {
             log('error', `Failed to cleanup folder: ${e.message}`);
         }
 
+        // Export engine configuration for Client Sync
+        try {
+            const configPayload = { protocol: activeProtocol, pollMs, maxChunkBytes };
+            fs.writeFileSync(path.join(sharedDir, 'netx_config.json'), JSON.stringify(configPayload), 'utf8');
+            log('system', `Exported configuration to ${sharedDir}/netx_config.json`);
+        } catch (e) {
+            log('error', `Failed to export configuration sync: ${e.message}`);
+        }
+
         if (activeProtocol === 'v1') {
-            pollTimer = setInterval(pollV1, 200);
-            log('system', `Server Proxy started in V1 Performance mode`);
+            pollTimer = setInterval(pollV1, Math.max(10, pollMs));
+            log('system', `Server Proxy started in V1 Performance mode (Poll: ${pollMs}ms)`);
         } else {
-            pollTimer = setInterval(poll, 150);
-            scanTimer = setInterval(scanForNewRequests, 150);
-            log('system', `Server Proxy started in V2 Compatibility mode`);
+            pollTimer = setInterval(poll, Math.max(10, pollMs));
+            scanTimer = setInterval(scanForNewRequests, Math.max(10, pollMs));
+            log('system', `Server Proxy started in V2 Compatibility mode (Chunk: ${maxChunkBytes / 1024}KB, Poll: ${pollMs}ms)`);
         }
 
         sweepTimer = setInterval(sweepGarbage, 5000);
     },
     stop: async () => {
+        try { fs.unlinkSync(path.join(sharedDir, 'netx_config.json')); } catch (e) { }
         clearInterval(pollTimer);
         clearInterval(scanTimer);
         clearInterval(sweepTimer);

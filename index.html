@@ -82,17 +82,6 @@
           </div>
         </div>
 
-        <!-- Protocol Engine -->
-        <div class="col-span-1 md:col-span-2 space-y-2">
-          <label class="block text-sm font-medium text-slate-400">Routing Engine</label>
-          <select id="select-protocol"
-            class="w-full border-r-[16px] border-r-transparent bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300 appearance-none cursor-pointer hover:border-slate-600 focus:bg-slate-800 transition-colors">
-            <option value="v1">Performance Mode (V1) — Fastest for Web Browsing</option>
-            <option value="v2" selected>Compatibility Mode (V2) — WebSockets & Streaming</option>
-          </select>
-          <p class="text-xs text-slate-500 mt-1">Both Client and Server MUST use the exact same engine.</p>
-        </div>
-
         <!-- Client Only Settings -->
         <div id="client-settings" class="col-span-1 md:col-span-2 hidden">
           <div class="space-y-2">
@@ -104,13 +93,50 @@
         </div>
 
         <!-- Server Only Settings -->
-        <div id="server-settings" class="col-span-1 md:col-span-2">
+        <div id="server-settings" class="col-span-1 md:col-span-2 space-y-4">
+
+          <!-- Protocol Engine -->
+          <div class="space-y-2">
+            <label class="block text-sm font-medium text-slate-400">Routing Engine</label>
+            <select id="select-protocol"
+              class="w-full border-r-[16px] border-r-transparent bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300 appearance-none cursor-pointer hover:border-slate-600 focus:bg-slate-800 transition-colors">
+              <option value="v1">Performance Mode (V1) — Fastest for Web Browsing (No WebSockets)</option>
+              <option value="v2" selected>Compatibility Mode (V2) — Slower, supports WebSockets & Streaming</option>
+            </select>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="block text-sm font-medium text-slate-400">Poll Interval (ms)</label>
+              <input type="number" id="input-poll" value="150"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300">
+            </div>
+            <div class="space-y-2">
+              <label class="block text-sm font-medium text-slate-400">Max Chunk (KB)</label>
+              <input type="number" id="input-chunk" value="512"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300">
+            </div>
+            <p class="text-xs text-slate-500 col-span-2">Higher values aggregate files into larger, less frequent writes
+              (fastest speed). Lower values reduce input latency.</p>
+          </div>
+
           <div class="space-y-2">
             <label class="block text-sm font-medium text-slate-400">Outbound SOCKS5 Proxy (Optional)</label>
             <input type="text" id="input-socks" placeholder="socks5://127.0.0.1:1080"
               class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300">
             <p class="text-xs text-slate-500 mt-1">Route server traffic through a SOCKS broker (e.g. Tor or Corporate
               Proxy).</p>
+          </div>
+
+          <div class="mt-4 p-3 bg-blue-900/30 border border-blue-800/50 rounded-lg">
+            <p class="text-xs text-blue-300 flex items-center gap-2">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd"
+                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                  clip-rule="evenodd"></path>
+              </svg>
+              The Server will generate a config file syncing these settings to the Client automatically!
+            </p>
           </div>
         </div>
       </div>
