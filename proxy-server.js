@@ -133,7 +133,7 @@ function writeServerChunk(id, buffer, isolate = false) {
     } else {
         conn.outBuffer.push(buffer);
         conn.outBufferLen += buffer.length;
-        if (conn.outBufferLen >= 128 * 1024) flushServerBuffer(id);
+        if (conn.outBufferLen >= 512 * 1024) flushServerBuffer(id);
     }
 }
 
@@ -464,8 +464,8 @@ module.exports = {
             pollTimer = setInterval(pollV1, 200);
             log('system', `Server Proxy started in V1 Performance mode`);
         } else {
-            pollTimer = setInterval(poll, 10);
-            scanTimer = setInterval(scanForNewRequests, 200);
+            pollTimer = setInterval(poll, 150);
+            scanTimer = setInterval(scanForNewRequests, 150);
             log('system', `Server Proxy started in V2 Compatibility mode`);
         }
 

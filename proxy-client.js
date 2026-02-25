@@ -15,7 +15,7 @@ let sweepTimer = null;
 let activeProtocol = 'v2';
 
 const TIMEOUT_SEC = 60;
-const POLL_MS = 20;
+const POLL_MS = 150;
 
 // Track active connections
 // id -> { res, clientSocket, isClosed, seqClientOut: 0, seqServerIn: 0 }
@@ -92,7 +92,7 @@ function writeClientChunk(id, buffer, isolate = false) {
     } else {
         conn.outBuffer.push(buffer);
         conn.outBufferLen += buffer.length;
-        if (conn.outBufferLen >= 128 * 1024) flushClientBuffer(id);
+        if (conn.outBufferLen >= 512 * 1024) flushClientBuffer(id);
     }
 }
 
