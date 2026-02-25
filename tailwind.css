@@ -635,6 +635,10 @@ video {
   height: 100vh;
 }
 
+.min-h-\[250px\] {
+  min-height: 250px;
+}
+
 .w-12 {
   width: 3rem;
 }
