@@ -5,12 +5,16 @@ const https = require('https');
 const net = require('net');
 const tls = require('tls');
 const url = require('url');
+const { app } = require('electron');
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const { SocksClient } = require('socks');
 
 let pollTimer = null;
 let scanTimer = null;
 let sweepTimer = null;
 let sharedDir = null;
 let sendLog = null;
+let socksProxyUrl = null;
 
 // Track active connections
 // id -> { socket, req, isClosed, seqClientIn: 0, seqServerOut: 0 }
@@ -161,15 +165,40 @@ function handleNewRequest(id, reqData) {
 
         const onConnect = () => { /* connected */ };
 
-        const socket = isTls
-            ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, onConnect)
-            : net.createConnection({ host, port }, onConnect);
+        const bindSocketEvents = (socket) => {
+            socket.on('data', (buf) => writeServerChunk(id, buf));
+            socket.on('end', () => closeConnection(id));
+            socket.on('error', (err) => closeConnection(id, err.message));
+            conn.socket = socket;
+        };
 
-        socket.on('data', (buf) => writeServerChunk(id, buf));
-        socket.on('end', () => closeConnection(id));
-        socket.on('error', (err) => closeConnection(id, err.message));
+        if (socksProxyUrl) {
+            const parsedSocks = url.parse(socksProxyUrl);
+            const proxyOptions = {
+                proxy: {
+                    host: parsedSocks.hostname,
+                    port: parseInt(parsedSocks.port, 10),
+                    type: 5
+                },
+                command: 'connect',
+                destination: { host, port }
+            };
 
-        conn.socket = socket;
+            SocksClient.createConnection(proxyOptions).then(info => {
+                let socket = info.socket;
+                if (isTls) {
+                    socket = tls.connect({ socket, host, servername: host, rejectUnauthorized: false }, onConnect);
+                }
+                bindSocketEvents(socket);
+            }).catch(err => {
+                closeConnection(id, `SOCKS5 Tunnel Error: ${err.message}`);
+            });
+        } else {
+            const socket = isTls
+                ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, onConnect)
+                : net.createConnection({ host, port }, onConnect);
+            bindSocketEvents(socket);
+        }
     } else {
         const parsed = url.parse(reqData.url);
         const transport = parsed.protocol === 'https:' ? https : http;
@@ -193,6 +222,10 @@ function handleNewRequest(id, reqData) {
             headers,
             rejectUnauthorized: false,
         };
+
+        if (socksProxyUrl) {
+            options.agent = new SocksProxyAgent(socksProxyUrl);
+        }
 
         const req = transport.request(options, (res) => {
             // Write virtual "headers" chunk as the very first message 
@@ -298,6 +331,7 @@ module.exports = {
     start: async (config, logCb) => {
         sendLog = logCb;
         sharedDir = config.folder;
+        socksProxyUrl = config.socks || null;
         if (!sharedDir || !fs.existsSync(sharedDir)) throw new Error('Invalid shared folder path.');
 
         // Clean up any zombie files from previous crashes

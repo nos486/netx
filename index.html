@@ -92,6 +92,17 @@
             <p class="text-xs text-slate-500 mt-1">Leave as 8080. When started, a built-in browser will appear.</p>
           </div>
         </div>
+
+        <!-- Server Only Settings -->
+        <div id="server-settings" class="col-span-1 md:col-span-2">
+          <div class="space-y-2">
+            <label class="block text-sm font-medium text-slate-400">Outbound SOCKS5 Proxy (Optional)</label>
+            <input type="text" id="input-socks" placeholder="socks5://127.0.0.1:1080"
+              class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300">
+            <p class="text-xs text-slate-500 mt-1">Route server traffic through a SOCKS broker (e.g. Tor or Corporate
+              Proxy).</p>
+          </div>
+        </div>
       </div>
 
       <!-- Action Footer -->

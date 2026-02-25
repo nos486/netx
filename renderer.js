@@ -2,10 +2,12 @@
 const btnModeServer = document.getElementById('btn-mode-server');
 const btnModeClient = document.getElementById('btn-mode-client');
 const clientSettings = document.getElementById('client-settings');
+const serverSettings = document.getElementById('server-settings');
 
 const inputFolder = document.getElementById('input-folder');
 const btnBrowse = document.getElementById('btn-browse');
 const inputPort = document.getElementById('input-port');
+const inputSocks = document.getElementById('input-socks');
 
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
@@ -32,12 +34,14 @@ function setMode(mode) {
         btnModeServer.className = 'flex-1 py-2 text-sm font-medium rounded-md bg-blue-600 text-white shadow-sm transition-colors';
         btnModeClient.className = 'flex-1 py-2 text-sm font-medium rounded-md text-slate-400 hover:text-slate-200 transition-colors';
         clientSettings.classList.add('hidden');
+        serverSettings.classList.remove('hidden');
         viewLogs.classList.remove('hidden');
         viewBrowser.classList.add('hidden');
     } else {
         btnModeClient.className = 'flex-1 py-2 text-sm font-medium rounded-md bg-blue-600 text-white shadow-sm transition-colors';
         btnModeServer.className = 'flex-1 py-2 text-sm font-medium rounded-md text-slate-400 hover:text-slate-200 transition-colors';
         clientSettings.classList.remove('hidden');
+        serverSettings.classList.add('hidden');
         // Don't show browser view until running
         viewLogs.classList.remove('hidden');
         viewBrowser.classList.add('hidden');
@@ -48,9 +52,11 @@ function setMode(mode) {
 const savedMode = localStorage.getItem('netx-mode') || 'server';
 const savedFolder = localStorage.getItem('netx-folder') || '';
 const savedPort = localStorage.getItem('netx-port') || '8080';
+const savedSocks = localStorage.getItem('netx-socks') || '';
 
 inputFolder.value = savedFolder;
 inputPort.value = savedPort;
+inputSocks.value = savedSocks;
 if (savedFolder) btnToggle.disabled = false;
 
 setMode(savedMode);
@@ -68,17 +74,17 @@ btnBrowse.addEventListener('click', async () => {
     }
 });
 
-// Port saving
-inputPort.addEventListener('change', () => {
-    localStorage.setItem('netx-port', inputPort.value);
-});
+// Port/Socks saving
+inputPort.addEventListener('change', () => localStorage.setItem('netx-port', inputPort.value));
+inputSocks.addEventListener('change', () => localStorage.setItem('netx-socks', inputSocks.value));
 
 // Start / Stop
 btnToggle.addEventListener('click', async () => {
     const config = {
         mode: currentMode,
         folder: inputFolder.value,
-        port: parseInt(inputPort.value, 10) || 8080
+        port: parseInt(inputPort.value, 10) || 8080,
+        socks: inputSocks.value.trim()
     };
 
     if (!isRunning) {
