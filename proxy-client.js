@@ -398,10 +398,22 @@ async function handleConnect(req, clientSocket, head) {
         const id = await openTunnel(reqData, null, mitmSocket);
         if (!id) return;
 
-        // The WebSocket handshake must be forwarded as the exact bytes
+        // The WebSocket handshake must be forwarded as exact bytes, but we must
+        // translate the URL back to a relative path and ensure Origin/Host match
         const reqLines = [`${mitmReq.method} ${mitmReq.url} HTTP/${mitmReq.httpVersion}`];
         for (let i = 0; i < mitmReq.rawHeaders.length; i += 2) {
-            reqLines.push(`${mitmReq.rawHeaders[i]}: ${mitmReq.rawHeaders[i + 1]}`);
+            let key = mitmReq.rawHeaders[i];
+            let val = mitmReq.rawHeaders[i + 1];
+
+            // VMware Horizon requires Origin to match the Host exactly
+            if (key.toLowerCase() === 'origin') {
+                val = (parseInt(port, 10) === 443 ? 'https://' : 'http://') + hostname;
+            }
+            if (key.toLowerCase() === 'host') {
+                val = hostname;
+            }
+
+            reqLines.push(`${key}: ${val}`);
         }
         reqLines.push('\r\n');
 
