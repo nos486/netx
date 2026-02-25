@@ -12,7 +12,9 @@ let sharedDir = null;
 let sendLog = null;
 let pollTimer = null;
 let sweepTimer = null;
+let activeProtocol = 'v2';
 
+const TIMEOUT_SEC = 60;
 const POLL_MS = 20;
 
 // Track active connections
@@ -262,6 +264,50 @@ async function openTunnel(reqData, res = null, clientSocket = null) {
 }
 
 // ── Shared Forge / Headers code ──────────────────────────────────────────────
+function sendViaFiles(reqData) {
+    return new Promise((resolve, reject) => {
+        const id = makeId();
+        const reqPath = path.join(sharedDir, `req_${id}.json`);
+        const resPath = path.join(sharedDir, `res_${id}.json`);
+
+        reqData.id = id;
+
+        try { fs.writeFileSync(reqPath, JSON.stringify(reqData), 'utf8'); }
+        catch (e) { return reject(new Error(`Cannot write request: ${e.message}`)); }
+
+        const deadline = Date.now() + TIMEOUT_SEC * 1000;
+        const timer = setInterval(() => {
+            if (!fs.existsSync(resPath)) {
+                if (Date.now() > deadline) {
+                    clearInterval(timer);
+                    try { fs.unlinkSync(reqPath); } catch (_) { }
+                    reject(new Error('Timeout waiting for server'));
+                }
+                return;
+            }
+            clearInterval(timer);
+            let resData;
+            try {
+                const raw = fs.readFileSync(resPath, 'utf8');
+                resData = JSON.parse(raw);
+            } catch (e) {
+                return reject(new Error(`Bad response file: ${e.message}`));
+            }
+            try { fs.unlinkSync(resPath); } catch (_) { }
+            resolve(resData);
+        }, POLL_MS);
+    });
+}
+
+function collectBody(req) {
+    return new Promise((resolve) => {
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', () => resolve(Buffer.alloc(0)));
+    });
+}
+
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade', 'proxy-connection']);
 function filterHeaders(headers) {
     const out = {};
@@ -352,6 +398,38 @@ async function proxyRequest(req, res, forceHttps = false) {
 
     log('info', `→ ${req.method} ${targetUrl}`);
 
+    if (activeProtocol === 'v1') {
+        const bodyBuf = await collectBody(req);
+        const reqData = {
+            method: req.method,
+            url: targetUrl,
+            headers: filterHeaders(req.headers),
+            body: bodyBuf.length > 0 ? bodyBuf.toString('base64') : null,
+        };
+
+        let resData;
+        try {
+            resData = await sendViaFiles(reqData);
+        } catch (e) {
+            log('error', `Proxy error for ${targetUrl}: ${e.message}`);
+            if (!res.headersSent) {
+                res.writeHead(502);
+                res.end(`NetX Proxy Error: ${e.message}`);
+            }
+            return;
+        }
+
+        if (resData.error) log('warning', `Server error: ${resData.error}`);
+        else log('success', `← ${resData.status} ${targetUrl}`);
+
+        if (!res.headersSent) {
+            res.writeHead(resData.status || 200, filterHeaders(resData.headers || {}));
+            if (resData.body) res.end(Buffer.from(resData.body, 'base64'));
+            else res.end();
+        }
+        return; // End V1 processing
+    }
+
     const reqData = {
         method: req.method,
         url: targetUrl,
@@ -436,6 +514,7 @@ module.exports = {
     start: async (config, logCb) => {
         sendLog = logCb;
         sharedDir = config.folder;
+        activeProtocol = config.protocol || 'v2';
         const port = config.port || 8080;
 
         if (!sharedDir || !fs.existsSync(sharedDir)) throw new Error('Invalid shared folder path.');

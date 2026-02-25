@@ -70,7 +70,6 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <!-- Shared Folder -->
         <div class="col-span-1 md:col-span-2 space-y-2">
           <label class="block text-sm font-medium text-slate-400">Shared Folder Path</label>
           <div class="flex gap-2">
@@ -81,6 +80,17 @@
               Browse
             </button>
           </div>
+        </div>
+
+        <!-- Protocol Engine -->
+        <div class="col-span-1 md:col-span-2 space-y-2">
+          <label class="block text-sm font-medium text-slate-400">Routing Engine</label>
+          <select id="select-protocol"
+            class="w-full border-r-[16px] border-r-transparent bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-slate-300 appearance-none cursor-pointer hover:border-slate-600 focus:bg-slate-800 transition-colors">
+            <option value="v1">Performance Mode (V1) — Fastest for Web Browsing</option>
+            <option value="v2" selected>Compatibility Mode (V2) — WebSockets & Streaming</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">Both Client and Server MUST use the exact same engine.</p>
         </div>
 
         <!-- Client Only Settings -->
